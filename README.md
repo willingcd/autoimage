@@ -49,8 +49,15 @@ pip install -r requirements.txt
 
 3. 配置环境变量：
 ```bash
-cp .env.example .env
-# 编辑 .env 文件，填入必要的配置
+# 本项目不自动加载 .env，请将环境变量注入到进程环境中
+# 方式一：export（推荐在 CI / 服务中使用）
+export GITHUB_TOKEN=xxx
+export GITHUB_REPO_OWNER=vllm-project
+export GITHUB_REPO_NAME=vllm
+export DOCKERHUB_REPOSITORY=vllm/vllm-openai
+
+# 方式二：本地开发可使用 shell source（请自行确保 .env 格式兼容你的 shell）
+# set -a; source .env; set +a
 ```
 
 ## 配置说明

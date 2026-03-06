@@ -1,7 +1,7 @@
 """Configuration management for the build automation system.
 
-This project intentionally avoids Pydantic BaseSettings. Configuration is loaded
-from environment variables (optionally from a local .env via python-dotenv).
+This project intentionally avoids Pydantic BaseSettings and dotenv loaders.
+Configuration is loaded strictly from environment variables.
 """
 
 from __future__ import annotations
@@ -10,11 +10,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-
-from dotenv import load_dotenv
-
-# Load environment variables from .env file (if present)
-load_dotenv()
 
 
 def _getenv(name: str, default: Optional[str] = None) -> Optional[str]:
