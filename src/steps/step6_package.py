@@ -8,13 +8,14 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-def package_image(image_tag: str, output_dir: Path, image_tag_name: str) -> Path:
+def package_image(image_tag: str, output_root: Path, image_tag_name: str) -> Path:
     """
     Step 6: Save Docker image as tar file.
     
     Args:
         image_tag: Docker image tag to package
-        output_dir: Directory to save the tar file
+        output_root: Root output directory; tar files will be stored under
+                     output_root / "images_tar"
         image_tag_name: Custom tag name for the output file
         
     Returns:
@@ -23,11 +24,13 @@ def package_image(image_tag: str, output_dir: Path, image_tag_name: str) -> Path
     Raises:
         RuntimeError: If packaging fails
     """
-    logger.info(f"Step 6: Packaging image {image_tag} to {output_dir}")
+    images_dir = output_root / "images_tar"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Step 6: Packaging image {image_tag} to {images_dir}")
     
     # Generate output filename using configured prefix
     output_filename = f"{settings.output_file_prefix}-{image_tag_name}.tar"
-    output_path = output_dir / output_filename
+    output_path = images_dir / output_filename
     
     # Save image
     if not save_image(image_tag, output_path):

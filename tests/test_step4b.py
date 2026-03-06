@@ -25,7 +25,13 @@ from config import settings
 logger = setup_logger(__name__)
 
 
-def test_step4b(sha_m: str, sha_n: str, pr_number: int, dry_run: bool = False):
+def test_step4b(
+    sha_m: str,
+    sha_n: str,
+    pr_number: int,
+    dry_run: bool = False,
+    model_key: str = "test-model",
+):
     """
     测试 Step 4-B: Docker Build
     
@@ -34,6 +40,7 @@ def test_step4b(sha_m: str, sha_n: str, pr_number: int, dry_run: bool = False):
         sha_n: Nightly build SHA
         pr_number: PR number
         dry_run: 如果为 True，只生成 Dockerfile 不实际构建
+        model_key: 用于命名的模型 key（测试环境下可随意指定）
     """
     logger.info("=" * 80)
     logger.info("测试 Step 4-B: Docker Build")
@@ -107,7 +114,15 @@ def test_step4b(sha_m: str, sha_n: str, pr_number: int, dry_run: bool = False):
             logger.info("⚠️  注意：这将实际构建 Docker 镜像，可能需要较长时间")
             logger.info("")
             
-            image_tag = docker_build_custom(sha_m, sha_n, pr_number)
+            output_root = Path("output")
+            output_root.mkdir(parents=True, exist_ok=True)
+            image_tag = docker_build_custom(
+                sha_m=sha_m,
+                sha_n=sha_n,
+                pr_number=pr_number,
+                model_key=model_key,
+                output_root=output_root,
+            )
             
             logger.info("")
             logger.info("=" * 80)
@@ -192,7 +207,8 @@ def main():
         sha_m=default_sha_m,
         sha_n=default_sha_n,
         pr_number=default_pr_number,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        model_key="test-model",
     )
     
     sys.exit(0 if success else 1)

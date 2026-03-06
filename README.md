@@ -93,14 +93,14 @@ export DOCKERHUB_REPOSITORY=vllm/vllm-openai
 python main.py \
   --model-id Qwen/Qwen3.5-35B-A3B-FP8 \
   --image-tag qwen3.5-v1.0 \
-  --output-dir ./output
+  --output-dir ./output    # 作为根目录，tar 会输出到 ./output/images_tar 下
 ```
 
 ### 参数说明
 
 - `--model-id`: 完整模型 ID（如 `Qwen/Qwen3.5-35B-A3B-FP8`），系统会自动提取搜索关键词
 - `--image-tag`: 输出镜像的自定义标签名称
-- `--output-dir`: 输出目录（tar 文件将保存在此）
+- `--output-dir`: 输出根目录（最终 tar 会保存在 `<output-dir>/images_tar`，构建中间产物在 `<output-dir>/docker_build`）
 
 **注意**：`--model-id` 支持完整模型 ID 格式，系统会自动去除尺寸、dtype、量化等信息，提取核心模型名用于搜索。
 
@@ -115,7 +115,27 @@ python main.py \
 4. **Step 4-A**: 如果是祖先，直接拉取 `nightly-{sha-n}` 镜像
 5. **Step 4-B**: 如果不是祖先，提取 PR 变更文件并构建新镜像
 6. **Step 5**: 在容器中验证模型类是否已注册到 ModelRegistry
-7. **Step 6**: 将镜像打包为 `{output_file_prefix}-{image-tag}.tar` 文件
+7. **Step 6**: 将镜像打包为 `{output_file_prefix}-{image-tag}.tar` 文件，存放在 `<output-dir>/images_tar` 中
+
+### 输出目录结构
+
+假设 `--output-dir=./output`，则目录结构大致如下：
+
+```text
+output/
+  images_tar/              # 所有最终打包好的镜像 tar
+    vllm-qwen3.5-v1.0.tar
+    vllm-qwen3.5-hotfix.tar
+
+  docker_build/            # 与 Docker build 相关的一切中间产物
+    dockerfiles/           # 所有生成的 Dockerfile 归档
+      Dockerfile.vllm-qwen3.5-<sha_m>-<sha_n>.generated
+    build_contexts/        # 每次构建的上下文快照
+      vllm-qwen3.5-<sha_m>-<sha_n>-<timestamp>/
+        vllm/model_executor/models/qwen3.py
+        vllm/model_executor/models/__init__.py
+        Dockerfile
+```
 
 ## 错误处理
 
