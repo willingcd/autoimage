@@ -4,7 +4,7 @@ flowchart TB
 
     S1["Step 1<br/>获取最新日构建<br/>nightly-shaxxxxx (sha-n)"]
 
-    S2["Step 2<br/>模糊匹配 Model 类型 PR (sha-m)<br/>同时解析 changed files 中的模型注册类名列表"]
+    S2["Step 2<br/>获取最新已合入的PR（sha-m）"]
 
     S3{"Step 3<br/>sha-m 是否为<br/>sha-n 的祖先？"}
 
