@@ -10,8 +10,9 @@ from src.utils.logger import setup_logger
 from src.error_handler import handle_error
 from src.steps.step1_get_nightly import get_nightly_sha
 from src.steps.step2_match_pr import match_model_pr
-from src.steps.step3_check_ancestor import check_ancestor_relationship
-from src.steps.step4_docker_ops import docker_pull_nightly, docker_build_custom
+from src.steps.step3_pull_nightly import pull_nightly_and_verify
+from src.steps.step4_check_ancestor import check_ancestor_relationship
+from src.steps.step4_docker_ops import docker_build_custom
 from src.steps.step5_validate import validate_model_registrations
 from src.steps.step6_package import package_image
 
@@ -20,26 +21,23 @@ logger = setup_logger(__name__)
 
 @click.command()
 @click.option("--model-id", required=True, help="Full model ID (e.g., Qwen/Qwen3.5-35B-A3B-FP8)")
-@click.option("--image-tag", required=True, help="Output image tag name")
 @click.option("--output-dir", required=True, type=click.Path(), help="Output directory for tar file")
-def main(model_id: str, image_tag: str, output_dir: str):
+def main(model_id: str, output_dir: str):
     """
     Build automation pipeline for inference engine models.
-    
+
     This script automates the process of building and validating Docker images
     for inference engine models (e.g., vLLM, TensorRT-LLM) based on PR changes.
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     logger.info(f"Starting build automation for model ID: {model_id}")
     logger.info(f"Output directory: {output_path}")
-    logger.info(f"Image tag: {image_tag}")
-    
+
     context = {
         "model_id": model_id,
-        "image_tag": image_tag,
-        "output_dir": str(output_path)
+        "output_dir": str(output_path),
     }
     
     try:
@@ -75,23 +73,31 @@ def main(model_id: str, image_tag: str, output_dir: str):
         context["pr_number"] = pr_number
         context["primary_model_key"] = primary_model_key
         logger.info(f"Step 2 completed: sha_m = {sha_m}, found {len(model_registrations)} registrations")
-        
-        # Step 3: Check ancestor relationship
+
+        # Step 3: Pull nightly image and verify digest
         logger.info("=" * 60)
-        logger.info("Step 3: Checking ancestor relationship")
+        logger.info("Step 3: Pull nightly-sha-n and verify image digest")
+        logger.info("=" * 60)
+        nightly_image_tag = pull_nightly_and_verify(sha_n)
+        logger.info(f"Step 3 completed: {nightly_image_tag}")
+
+        # Step 4: Is sha-m an ancestor of sha-n?
+        logger.info("=" * 60)
+        logger.info("Step 4: Check if sha-m is ancestor of sha-n")
         logger.info("=" * 60)
         is_ancestor = check_ancestor_relationship(sha_m, sha_n)
-        logger.info(f"Step 3 completed: sha_m {'IS' if is_ancestor else 'IS NOT'} ancestor of sha_n")
-        
-        # Step 4: Docker operations
-        logger.info("=" * 60)
+        logger.info(f"Step 4 completed: sha_m {'IS' if is_ancestor else 'IS NOT'} ancestor of sha_n")
+
+        # sha_n_tag = Docker Hub tag part for nightly image (e.g. nightly-abc1234)
+        sha_n_tag = f"nightly-{sha_n}"
+
         if is_ancestor:
-            logger.info("Step 4-A: Pulling nightly image")
-            logger.info("=" * 60)
-            image_tag_final = docker_pull_nightly(sha_n)
+            image_tag_final = nightly_image_tag
+            logger.info(f"Using pulled nightly image: {image_tag_final}")
+            package_source = "pull"
+            package_pr_number = None
         else:
-            logger.info("Step 4-B: Building custom image")
-            logger.info("=" * 60)
+            logger.info("Step 4-B: Building custom image from PR changes")
             image_tag_final = docker_build_custom(
                 sha_m=sha_m,
                 sha_n=sha_n,
@@ -99,20 +105,28 @@ def main(model_id: str, image_tag: str, output_dir: str):
                 model_key=primary_model_key,
                 output_root=output_path,
             )
-        logger.info(f"Step 4 completed: image_tag = {image_tag_final}")
-        
+            package_source = "build"
+            package_pr_number = pr_number
+        logger.info(f"Final image for Step 5/6: {image_tag_final}")
+
         # Step 5: Validate model registrations
         logger.info("=" * 60)
         logger.info("Step 5: Validating model registrations")
         logger.info("=" * 60)
         validate_model_registrations(image_tag_final, model_registrations)
         logger.info("Step 5 completed: All validations passed")
-        
+
         # Step 6: Package image (to output_root / images_tar)
         logger.info("=" * 60)
         logger.info("Step 6: Packaging image")
         logger.info("=" * 60)
-        tar_path = package_image(image_tag_final, output_path, image_tag)
+        tar_path = package_image(
+            image_tag_final,
+            output_path,
+            source=package_source,
+            sha_n_tag=sha_n_tag,
+            pr_number=package_pr_number,
+        )
         logger.info(f"Step 6 completed: Package saved to {tar_path}")
         
         # Success

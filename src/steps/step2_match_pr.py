@@ -1,14 +1,10 @@
-"""Step 2: Match PR and parse model registrations."""
+"""Step 2: Get latest merged PR and parse model registrations."""
 from typing import Dict, List, Optional
 
 import requests
 
 from config import settings
-from src.utils.github_api import (
-    GitHubAPI, 
-    extract_registrations_from_pr,
-    extract_search_model_name
-)
+from src.utils.github_api import GitHubAPI, extract_registrations_from_pr
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -16,12 +12,10 @@ logger = setup_logger(__name__)
 
 def match_model_pr(model_id: str) -> Dict:
     """
-    Match a PR related to the model and extract registrations.
-    
-    Uses strategy 1: exact match with support keywords / exclude bugfix.
+    Get the latest merged PR (no name matching) and extract registrations.
     
     Args:
-        model_id: Full model ID (e.g., "Qwen/Qwen3.5-35B-A3B-FP8")
+        model_id: Full model ID (e.g., "Qwen/Qwen3.5-35B-A3B-FP8"); kept for API compatibility, not used for matching.
         
     Returns:
         Dictionary with:
@@ -30,34 +24,19 @@ def match_model_pr(model_id: str) -> Dict:
             - pr_number: PR number
             
     Raises:
-        RuntimeError: If no matching merged PR is found
+        RuntimeError: If no merged PR is found
     """
     github_api = GitHubAPI()
     
-    # Step 1: Extract search model name from full model ID
-    search_model_name = extract_search_model_name(model_id)
-    logger.info(
-        f"Extracted search model name: '{search_model_name}' from model ID: '{model_id}'"
-    )
+    logger.info("Step 2: Fetching latest merged PR (no name matching)")
     
-    # Step 2: Search PR using strategy 1 (exact match)
-    pr_details = github_api.search_pr_by_model_name_exact(
-        search_model_name, 
-        full_model_id=model_id
-    )
+    pr_details = github_api.get_latest_merged_pr()
     
     if not pr_details:
-        # Build detailed error message
         error_msg = (
-            f"No merged PR found for model ID: {model_id}\n"
-            f"  - Search model name: {search_model_name}\n"
-            f"  - Tried strategy 1a: exact match with support keywords + [MODEL] prefix\n"
-            f"  - Tried strategy 1b: exact match excluding bugfix + [MODEL] prefix\n"
-            f"  - Please check if:\n"
-            f"    1. The model ID is correct\n"
-            f"    2. A PR supporting this model has been merged\n"
-            f"    3. The PR title starts with [MODEL]\n"
-            f"    4. The PR title contains the model name"
+            "No merged PR found in the repository.\n"
+            "  - Only closed-and-merged PRs are considered.\n"
+            "  - Please ensure at least one PR has been merged."
         )
         logger.error(error_msg)
         raise RuntimeError(error_msg)
@@ -89,9 +68,7 @@ def match_model_pr(model_id: str) -> Dict:
         raise RuntimeError(f"PR #{pr_number} has no merge commit SHA")
     
     pr_title = pr_details.get("title", "N/A")
-    logger.info(
-        f"Found merged PR #{pr_number} for model {model_id}:"
-    )
+    logger.info(f"Found latest merged PR #{pr_number}:")
     logger.info(f"  PR Title: {pr_title}")
     logger.info(f"  Merge SHA: {merge_commit_sha}")
     

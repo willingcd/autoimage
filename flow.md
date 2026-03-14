@@ -1,31 +1,22 @@
 ```mermaid
 flowchart TB
-    START(["🚀 START<br/>触发构建，输入 model_name / image_tag / output_dir"])
-
+    START(["🚀 START<br/>触发构建，输入 model_id / output_dir"])
     S1["Step 1<br/>获取最新日构建<br/>nightly-shaxxxxx (sha-n)"]
-
     S2["Step 2<br/>获取最新已合入的PR（sha-m）"]
-
-    S3{"Step 3<br/>sha-m 是否为<br/>sha-n 的祖先？"}
-
-    S4A["Step 4-A<br/>docker pull<br/>nightly-sha-n"]
-
+    S3["Step 3<br/>docker pull<br/>nightly-sha-n<br>校验已pull镜像与docker hub镜像的哈希值"]
+    S4{"Step 4<br/>sha-m 是否为<br/>sha-n 的祖先？"}
     S4B["Step 4-B<br/>提取 sha-m 自身的 changed files<br/>新建 Dockerfile → docker build"]
-
     S5["Step 5<br/>docker run 验证<br/>动态校验模型注册类名列表"]
-
-    S6["Step 6<br/>docker save<br/>打包为 vllm-{image_tag}.tar"]
-
+    S6["Step 6<br/>docker save<br/>打包为 pull/build 命名 + 时间戳 .tar"]
     END_OK(["✅ END<br/>构建成功"])
-
     ERR["❌ 发送警告通知到 App<br/>关闭构建流"]
 
     START --> S1
     S1 --> S2
     S2 --> S3
-    S3 -->|是| S4A
-    S3 -->|否| S4B
-    S4A --> S5
+    S3 --> S4
+    S4 -->|是| S5
+    S4 -->|否| S4B
     S4B --> S5
     S5 --> S6
     S6 --> END_OK
@@ -44,8 +35,8 @@ flowchart TB
     classDef success fill:#B5D5A5,stroke:#A5C595,stroke-width:2px,color:#5a7a5a,font-weight:bold
 
     class START startEnd
-    class S1,S2,S4A,S4B,S5,S6 process
-    class S3 decision
+    class S1,S2,S3,S4B,S5,S6 process
+    class S4 decision
     class ERR error
     class END_OK success
 ```

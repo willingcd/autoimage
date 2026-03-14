@@ -1,47 +1,14 @@
-"""Step 4-A/B: Docker pull or build operations."""
-import tempfile
+"""Step 4-B: Docker build from PR changes (base image nightly-sha-n already pulled in Step 3)."""
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.utils.docker_utils import check_image_exists, pull_image, build_image
+from src.utils.docker_utils import build_image
 from src.utils.github_api import GitHubAPI
 from src.utils.logger import setup_logger
 from config import settings
 
 logger = setup_logger(__name__)
-
-
-def docker_pull_nightly(sha_n: str) -> str:
-    """
-    Step 4-A: Pull nightly image with SHA tag.
-    
-    Args:
-        sha_n: Nightly build SHA
-        
-    Returns:
-        Image tag that was pulled
-        
-    Raises:
-        RuntimeError: If image doesn't exist or pull fails
-    """
-    image_tag = f"{settings.dockerhub_repository}:nightly-{sha_n}"
-    
-    logger.info(f"Step 4-A: Attempting to pull {image_tag}")
-    
-    # Check if image exists
-    if not check_image_exists(image_tag):
-        raise RuntimeError(
-            f"Image {image_tag} does not exist in DockerHub. "
-            "Cannot fallback to nightly tag for safety reasons."
-        )
-    
-    # Pull image
-    if not pull_image(image_tag):
-        raise RuntimeError(f"Failed to pull image: {image_tag}")
-    
-    logger.info(f"Successfully pulled image: {image_tag}")
-    return image_tag
 
 
 def docker_build_custom(
@@ -71,7 +38,8 @@ def docker_build_custom(
         f"Step 4-B: Building custom image for PR #{pr_number} "
         f"(sha_m: {sha_m}, sha_n: {sha_n}, model_key: {model_key})"
     )
-    
+    # Base image nightly-{sha_n} was already pulled and digest-verified in Step 3.
+
     github_api = GitHubAPI()
     
     # Get changed files from PR
@@ -141,12 +109,10 @@ def docker_build_custom(
         f"and archived as {dockerfile_archive_path}"
     )
     
-    # Build image
-    image_tag = f"{settings.dockerhub_repository}:custom-{sha_m[:7]}"
-    
+    # Build image: tag = <sha_n's tag>_PR<pr_number> (e.g. nightly-abc1234_PR123)
+    image_tag = f"{settings.dockerhub_repository}:nightly-{sha_n}_PR{pr_number}"
     if not build_image(dockerfile_in_context, image_tag, build_context=context_dir):
         raise RuntimeError(f"Failed to build image: {image_tag}")
-    
     logger.info(f"Successfully built image: {image_tag}")
     return image_tag
 

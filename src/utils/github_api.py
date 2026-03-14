@@ -294,6 +294,44 @@ class GitHubAPI:
 
         return None
     
+    def get_latest_merged_pr(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest merged PR in the repo (no title/name matching).
+        Uses list pulls with state=closed, then filters by merged_at and returns the most recent.
+
+        Returns:
+            PR details dict including merge_commit_sha, or None if no merged PR found.
+        """
+        url = f"{GITHUB_API_BASE}/repos/{settings.github_repo_owner}/{settings.github_repo_name}/pulls"
+        params = {
+            "state": "closed",
+            "sort": "updated",
+            "direction": "desc",
+            "per_page": 50,
+        }
+        try:
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
+            response.raise_for_status()
+            closed_prs = response.json()
+        except requests.RequestException as e:
+            logger.error(f"Failed to list closed PRs: {e}")
+            raise
+
+        merged = [pr for pr in closed_prs if pr.get("merged_at")]
+        if not merged:
+            logger.warning("No merged PRs found in recent closed PRs")
+            return None
+
+        # Sort by merged_at descending (latest first)
+        merged.sort(key=lambda pr: pr["merged_at"], reverse=True)
+        latest = merged[0]
+        pr_number = latest["number"]
+        pr_details = self.get_pr_details(pr_number)
+        if not pr_details.get("merge_commit_sha"):
+            logger.warning(f"PR #{pr_number} has no merge_commit_sha, skipping")
+            return None
+        return pr_details
+
     def get_pr_details(self, pr_number: int) -> Dict[str, Any]:
         """
         Get detailed information about a PR.

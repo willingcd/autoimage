@@ -1,0 +1,2 @@
+# Prefect flow only; run from project root so main.py and config use project deps.
+prefect>=3.0.0

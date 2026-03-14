@@ -7,7 +7,7 @@
 ## 功能特性
 
 - 🔍 自动获取最新 nightly 构建
-- 📋 智能匹配模型相关 PR
+- 📋 获取最新已合入的 PR（不做名称匹配）
 - 🔗 判断 commit 祖先关系
 - 🐳 Docker 镜像拉取/构建
 - ✅ 模型注册验证
@@ -25,7 +25,8 @@
 │   ├── steps/            # 各步骤实现
 │   │   ├── step1_get_nightly.py
 │   │   ├── step2_match_pr.py
-│   │   ├── step3_check_ancestor.py
+│   │   ├── step3_pull_nightly.py
+│   │   ├── step4_check_ancestor.py
 │   │   ├── step4_docker_ops.py
 │   │   ├── step5_validate.py
 │   │   └── step6_package.py
@@ -92,30 +93,25 @@ export DOCKERHUB_REPOSITORY=vllm/vllm-openai
 ```bash
 python main.py \
   --model-id Qwen/Qwen3.5-35B-A3B-FP8 \
-  --image-tag qwen3.5-v1.0 \
   --output-dir ./output    # 作为根目录，tar 会输出到 ./output/images_tar 下
 ```
 
 ### 参数说明
 
-- `--model-id`: 完整模型 ID（如 `Qwen/Qwen3.5-35B-A3B-FP8`），系统会自动提取搜索关键词
-- `--image-tag`: 输出镜像的自定义标签名称
+- `--model-id`: 完整模型 ID（如 `Qwen/Qwen3.5-35B-A3B-FP8`），用于命名与上下文；Step 2 不按模型名匹配 PR，仅取最新已合入的 PR
 - `--output-dir`: 输出根目录（最终 tar 会保存在 `<output-dir>/images_tar`，构建中间产物在 `<output-dir>/docker_build`）
-
-**注意**：`--model-id` 支持完整模型 ID 格式，系统会自动去除尺寸、dtype、量化等信息，提取核心模型名用于搜索。
 
 ## 工作流程
 
 1. **Step 1**: 从 DockerHub 获取最新 nightly 构建的 SHA (sha-n)
-2. **Step 2**: 
-   - 从完整模型 ID 中提取搜索关键词（去除尺寸、dtype、量化等信息）
-   - 使用策略1（精确匹配 + 支持关键词/排除bugfix）搜索已合并 PR
-   - 获取 merge commit SHA (sha-m)，并解析模型注册信息
-3. **Step 3**: 使用 `git merge-base` 判断 sha-m 是否为 sha-n 的祖先
-4. **Step 4-A**: 如果是祖先，直接拉取 `nightly-{sha-n}` 镜像
-5. **Step 4-B**: 如果不是祖先，提取 PR 变更文件并构建新镜像
+2. **Step 2**: 获取仓库中**最新已合入的 PR**（不做名称匹配），得到 merge commit SHA (sha-m)，并解析该 PR 的模型注册信息
+3. **Step 3**: `docker pull nightly-{sha-n}`，并校验已拉取镜像与 Docker Hub 上镜像的哈希值（digest）
+4. **Step 4**: 判断 sha-m 是否为 sha-n 的祖先；**是**则直接使用 Step 3 的镜像进入 Step 5；**否**则执行 Step 4-B
+5. **Step 4-B**（仅当非祖先时）: 提取 sha-m 的 changed files，生成 Dockerfile，`docker build` 得到自定义镜像
 6. **Step 5**: 在容器中验证模型类是否已注册到 ModelRegistry
-7. **Step 6**: 将镜像打包为 `{output_file_prefix}-{image-tag}.tar` 文件，存放在 `<output-dir>/images_tar` 中
+7. **Step 6**: 将镜像打包为 tar 文件，存放在 `<output-dir>/images_tar` 中。命名规则：
+   - **pull 路径**：镜像名与 Docker Hub 一致 `<image_name>:<tag>` 不变；tar 命名为 `{prefix}-pull-{nightly_tag}-{时间戳}.tar`（体现为 pull、含时间戳）
+   - **build 路径**：镜像 tag 为 `<sha-n 的 tag>_PR<PR 号>`（如 `nightly-abc1234_PR123`）；tar 命名为 `{prefix}-build-{nightly_tag}-PR{pr}-{时间戳}.tar`（体现为 build、含 sha-n tag 与 PR 号、时间戳）
 
 ### 输出目录结构
 
@@ -123,9 +119,9 @@ python main.py \
 
 ```text
 output/
-  images_tar/              # 所有最终打包好的镜像 tar
-    vllm-qwen3.5-v1.0.tar
-    vllm-qwen3.5-hotfix.tar
+  images_tar/              # 最终打包好的镜像 tar
+    vllm-pull-nightly-abc1234-20250311123456.tar   # pull 路径
+    vllm-build-nightly-abc1234-PR123-20250311123500.tar   # build 路径
 
   docker_build/            # 与 Docker build 相关的一切中间产物
     dockerfiles/           # 所有生成的 Dockerfile 归档
@@ -196,12 +192,10 @@ python tests/test_step4b.py \
 - 检查是否有 nightly 标签存在
 - 确认仓库是公开的或已配置正确的认证信息
 
-### 问题：找不到匹配的 PR
-- 确认模型 ID 格式正确（如 `Qwen/Qwen3.5-35B-A3B-FP8`）
-- 检查系统提取的搜索关键词是否正确（查看日志中的 "Extracted search model name"）
-- 检查是否有已合并的相关 PR，且 PR 标题包含模型名
-- 确认 GitHub Token 有足够权限
-- 查看详细错误信息，了解尝试了哪些搜索策略
+### 问题：找不到已合入的 PR
+- 确认仓库中至少有一个**已合并**的 PR（仅 closed 未 merge 的不算）
+- 确认 GitHub Token 有足够权限（repo 权限）
+- 检查 `GITHUB_REPO_OWNER` 与 `GITHUB_REPO_NAME` 配置是否正确
 
 ### 问题：Docker 操作失败
 - 确认 Docker daemon 正在运行：`docker ps`

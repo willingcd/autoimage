@@ -1,7 +1,9 @@
 """Docker utilities for image operations."""
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+
+import requests
 
 try:
     import docker
@@ -16,6 +18,10 @@ from config import settings
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# Docker Hub registry (for digest fetch)
+DOCKERHUB_REGISTRY = "https://registry-1.docker.io"
+DOCKERHUB_AUTH = "https://auth.docker.io/token"
 
 # Initialize Docker client
 try:
@@ -81,6 +87,105 @@ def pull_image(image_tag: str) -> bool:
             
     except (APIError, ImageNotFound, subprocess.CalledProcessError) as e:
         logger.error(f"Failed to pull image {image_tag}: {e}")
+        return False
+
+
+def _parse_image_tag(image_tag: str) -> Tuple[str, str]:
+    """Split image_tag into repository and tag. e.g. 'vllm/vllm-openai:nightly-abc' -> ('vllm/vllm-openai', 'nightly-abc')."""
+    if ":" in image_tag:
+        repo, tag = image_tag.rsplit(":", 1)
+        return repo.strip(), tag.strip()
+    return image_tag.strip(), "latest"
+
+
+def get_manifest_digest_from_registry(image_tag: str) -> Optional[str]:
+    """
+    Get the image digest (sha256:...) from the registry for the given tag.
+    Only supports Docker Hub (registry-1.docker.io) for now.
+
+    Args:
+        image_tag: Full image tag (e.g. 'vllm/vllm-openai:nightly-abc1234')
+
+    Returns:
+        Digest string (e.g. 'sha256:abc...') or None if failed
+    """
+    repo, tag = _parse_image_tag(image_tag)
+    scope = f"repository:{repo}:pull"
+    try:
+        # Get token (optional basic auth for Docker Hub)
+        auth = None
+        if settings.dockerhub_username and settings.dockerhub_token:
+            auth = (settings.dockerhub_username, settings.dockerhub_token)
+        r = requests.get(
+            DOCKERHUB_AUTH,
+            params={"service": "registry.docker.io", "scope": scope},
+            auth=auth,
+            timeout=15,
+        )
+        r.raise_for_status()
+        token = r.json().get("token")
+        if not token:
+            logger.warning("No token in registry auth response")
+            return None
+
+        # HEAD manifest to get Docker-Content-Digest
+        url = f"{DOCKERHUB_REGISTRY}/v2/{repo}/manifests/{tag}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+        }
+        resp = requests.head(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        digest = resp.headers.get("Docker-Content-Digest") or resp.headers.get("docker-content-digest")
+        if digest:
+            logger.info(f"Registry digest for {image_tag}: {digest}")
+        return digest
+    except Exception as e:
+        logger.warning(f"Failed to get manifest digest from registry for {image_tag}: {e}")
+        return None
+
+
+def verify_image_digest_after_pull(image_tag: str, expected_digest: str) -> bool:
+    """
+    Verify that the locally pulled image matches the expected registry digest.
+
+    Args:
+        image_tag: Full image tag (e.g. 'vllm/vllm-openai:nightly-abc1234')
+        expected_digest: Expected digest from registry (e.g. 'sha256:...')
+
+    Returns:
+        True if local image has matching RepoDigest
+    """
+    if not expected_digest:
+        return False
+    try:
+        if docker_client:
+            image = docker_client.images.get(image_tag)
+            # image.attrs has RepoDigests like ["repo@sha256:..."]
+            repo_digests = image.attrs.get("RepoDigests") or []
+        else:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{json .RepoDigests}}", image_tag],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                logger.error(f"docker inspect failed: {result.stderr}")
+                return False
+            import json
+            repo_digests = json.loads(result.stdout or "[]")
+        # Expected form: repo@sha256:xxx
+        for rd in repo_digests:
+            if rd.endswith("@" + expected_digest) or expected_digest in rd:
+                logger.info(f"Digest verified: local image matches registry {expected_digest}")
+                return True
+        logger.error(
+            f"Digest mismatch: expected {expected_digest}, local RepoDigests: {repo_digests}"
+        )
+        return False
+    except Exception as e:
+        logger.error(f"Failed to verify image digest: {e}")
         return False
 
 
