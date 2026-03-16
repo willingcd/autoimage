@@ -1,7 +1,7 @@
 """Main entry point for build automation."""
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, TypeVar
 
 import click
 
@@ -17,6 +17,28 @@ from src.steps.step5_validate import validate_model_registrations
 from src.steps.step6_package import package_image
 
 logger = setup_logger(__name__)
+
+MAX_RETRIES = 3
+T = TypeVar("T")
+
+
+def run_with_retry(step_name: str, fn: Callable[..., T], *args, **kwargs) -> T:
+    """
+    Run a step up to MAX_RETRIES times; on final failure re-raise so caller can notify and exit.
+    """
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"{step_name} attempt {attempt}/{MAX_RETRIES} failed: {e}")
+            if attempt == MAX_RETRIES:
+                logger.error(f"{step_name} failed after {MAX_RETRIES} attempts")
+                raise
+            logger.info(f"Retrying {step_name}...")
+    assert last_error is not None
+    raise last_error
 
 
 @click.command()
@@ -41,19 +63,19 @@ def main(model_id: str, output_dir: str):
     }
     
     try:
-        # Step 1: Get latest nightly build SHA
+        # Step 1: Get latest nightly build SHA (retry up to MAX_RETRIES)
         logger.info("=" * 60)
         logger.info("Step 1: Getting latest nightly build SHA")
         logger.info("=" * 60)
-        sha_n = get_nightly_sha()
+        sha_n = run_with_retry("Step 1", get_nightly_sha)
         context["sha_n"] = sha_n
         logger.info(f"Step 1 completed: sha_n = {sha_n}")
-        
-        # Step 2: Match PR and parse registrations
+
+        # Step 2: Match PR and parse registrations (retry up to MAX_RETRIES)
         logger.info("=" * 60)
         logger.info("Step 2: Matching PR and parsing registrations")
         logger.info("=" * 60)
-        pr_result = match_model_pr(model_id)
+        pr_result = run_with_retry("Step 2", match_model_pr, model_id)
         sha_m = pr_result["sha_m"]
         model_registrations = pr_result["model_registrations"]
         pr_number = pr_result["pr_number"]
@@ -74,11 +96,11 @@ def main(model_id: str, output_dir: str):
         context["primary_model_key"] = primary_model_key
         logger.info(f"Step 2 completed: sha_m = {sha_m}, found {len(model_registrations)} registrations")
 
-        # Step 3: Pull nightly image and verify digest
+        # Step 3: Pull nightly image and verify digest (retry up to MAX_RETRIES)
         logger.info("=" * 60)
         logger.info("Step 3: Pull nightly-sha-n and verify image digest")
         logger.info("=" * 60)
-        nightly_image_tag = pull_nightly_and_verify(sha_n)
+        nightly_image_tag = run_with_retry("Step 3", pull_nightly_and_verify, sha_n)
         logger.info(f"Step 3 completed: {nightly_image_tag}")
 
         # Step 4: Is sha-m an ancestor of sha-n?
@@ -97,13 +119,16 @@ def main(model_id: str, output_dir: str):
             package_source = "pull"
             package_pr_number = None
         else:
-            logger.info("Step 4-B: Building custom image from PR changes")
-            image_tag_final = docker_build_custom(
-                sha_m=sha_m,
-                sha_n=sha_n,
-                pr_number=pr_number,
-                model_key=primary_model_key,
-                output_root=output_path,
+            logger.info("Step 4-B: Building custom image from PR changes (retry up to MAX_RETRIES)")
+            image_tag_final = run_with_retry(
+                "Step 4-B",
+                lambda: docker_build_custom(
+                    sha_m=sha_m,
+                    sha_n=sha_n,
+                    pr_number=pr_number,
+                    model_key=primary_model_key,
+                    output_root=output_path,
+                ),
             )
             package_source = "build"
             package_pr_number = pr_number
@@ -136,9 +161,11 @@ def main(model_id: str, output_dir: str):
         logger.info("=" * 60)
         
     except Exception as e:
-        # Handle error and exit
-        handle_error("Build Pipeline", e, context)
-        sys.exit(1)
+        # After retries exhausted (or other error): notify and close build flow
+        try:
+            handle_error("Build Pipeline", e, context)
+        finally:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
