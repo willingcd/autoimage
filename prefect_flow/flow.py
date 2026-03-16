@@ -1,95 +1,188 @@
-"""
-Prefect flow: trigger parallel builds for vllm, vllm_ascend, sglang, mindie.
+"""Prefect flow that wraps the existing 6-step build pipeline.
 
-Does not modify any existing code; runs main.main() via subprocess with
-per-engine env and output dir (e.g. /output/vllm, /output/vllm_ascend, ...).
+Design goals:
+- Do NOT modify existing project code (main.py, src/steps, config.py).
+- Expose a clean Prefect @flow that company pipelines can import.
+- Keep all Prefect-specific code inside the `prefect_flow` package.
 """
 
-import os
-import subprocess
-import sys
 from pathlib import Path
+from typing import Dict, Any
 
 from prefect import flow, task
 
-from .engine_configs import (
-    ENGINE_ENV_OVERRIDES,
-    ENGINE_IDS,
-    ENGINE_OUTPUT_SUBDIRS,
-)
+from src.error_handler import handle_error
+from src.steps.step1_get_nightly import get_nightly_sha
+from src.steps.step2_match_pr import match_model_pr
+from src.steps.step3_pull_nightly import pull_nightly_and_verify
+from src.steps.step4_check_ancestor import check_ancestor_relationship
+from src.steps.step4_docker_ops import docker_build_custom
+from src.steps.step5_validate import validate_model_registrations
+from src.steps.step6_package import package_image
 
 
-def _project_root() -> Path:
-    """Project root (parent of prefect_flow)."""
-    return Path(__file__).resolve().parent.parent
+@task(name="step1_get_nightly_sha", retries=3, retry_delay_seconds=30)
+def step1_get_nightly_sha_task() -> str:
+    """Prefect task: Step 1 - get latest nightly SHA from Docker registry."""
+    return get_nightly_sha()
 
 
-@task(name="build_engine")
-def build_engine_task(engine_id: str, model_id: str, output_root: Path) -> dict:
-    """
-    Run the existing main.py for one engine in a subprocess.
+@task(name="step2_match_pr", retries=3, retry_delay_seconds=30)
+def step2_match_pr_task(model_id: str) -> Dict[str, Any]:
+    """Prefect task: Step 2 - get latest merged PR and model registrations."""
+    return match_model_pr(model_id)
 
-    Uses ENGINE_* env overrides and output_dir = output_root / engine_subdir.
-    """
-    if engine_id not in ENGINE_IDS:
-        raise ValueError(f"Unknown engine_id: {engine_id}")
 
-    subdir = ENGINE_OUTPUT_SUBDIRS[engine_id]
-    output_dir = (output_root / subdir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+@task(name="step3_pull_and_verify", retries=3, retry_delay_seconds=30)
+def step3_pull_and_verify_task(sha_n: str) -> str:
+    """Prefect task: Step 3 - docker pull nightly-sha-n and verify digest."""
+    return pull_nightly_and_verify(sha_n)
 
-    env = os.environ.copy()
-    env.update(ENGINE_ENV_OVERRIDES.get(engine_id, {}))
 
-    root = _project_root()
-    main_py = root / "main.py"
-    if not main_py.exists():
-        raise FileNotFoundError(f"main.py not found at {main_py}")
+@task(name="step4_check_ancestor")
+def step4_check_ancestor_task(sha_m: str, sha_n: str) -> bool:
+    """Prefect task: Step 4 - check if sha-m is ancestor of sha-n."""
+    return check_ancestor_relationship(sha_m, sha_n)
 
-    cmd = [
-        sys.executable,
-        str(main_py),
-        "--model-id",
-        model_id,
-        "--output-dir",
-        str(output_dir),
-    ]
-    result = subprocess.run(
-        cmd,
-        cwd=str(root),
-        env=env,
-        capture_output=True,
-        text=True,
+
+@task(name="step4b_docker_build", retries=3, retry_delay_seconds=60)
+def step4b_docker_build_task(
+    sha_m: str,
+    sha_n: str,
+    pr_number: int,
+    model_key: str,
+    output_root: Path,
+) -> str:
+    """Prefect task: Step 4-B - build custom image from PR changes."""
+    return docker_build_custom(
+        sha_m=sha_m,
+        sha_n=sha_n,
+        pr_number=pr_number,
+        model_key=model_key,
+        output_root=output_root,
     )
 
-    return {
-        "engine_id": engine_id,
-        "output_dir": str(output_dir),
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
+
+@task(name="step5_validate")
+def step5_validate_task(image_tag: str, model_registrations: Dict[str, Any]) -> None:
+    """Prefect task: Step 5 - validate model registrations in container."""
+    validate_model_registrations(image_tag, model_registrations)
 
 
-@flow(name="multi_engine_build", description="Build vllm, vllm_ascend, sglang, mindie in parallel")
-def multi_engine_build_flow(model_id: str, output_root: str = "/output") -> list:
-    """
-    Run the build pipeline for all four engines in parallel.
+@task(name="step6_package")
+def step6_package_task(
+    image_tag: str,
+    output_root: Path,
+    source: str,
+    sha_n_tag: str,
+    pr_number: int | None,
+) -> Path:
+    """Prefect task: Step 6 - package Docker image as tar file."""
+    return package_image(
+        image_tag=image_tag,
+        output_root=output_root,
+        source=source,
+        sha_n_tag=sha_n_tag,
+        pr_number=pr_number,
+    )
+
+
+@flow(
+    name="build_inference_engine_image",
+    description=(
+        "Build and validate an inference engine Docker image using the "
+        "existing 6-step pipeline (nightly SHA, PR, pull/build, validate, package)."
+    ),
+)
+def build_pipeline_flow(model_id: str, output_dir: str) -> Dict[str, Any]:
+    """Top-level Prefect flow wrapping steps 1–6.
 
     Args:
-        model_id: Full model ID (e.g. Qwen/Qwen3.5-35B-A3B-FP8)
-        output_root: Base output directory; each engine writes to output_root/<engine_subdir>/
+        model_id: Full model ID (e.g., 'Qwen/Qwen3.5-35B-A3B-FP8').
+        output_dir: Base output directory (same semantics as main.py).
 
     Returns:
-        List of result dicts from each engine task.
+        A dict summarising key results (sha_n, sha_m, pr_number, image_tag, tar_path).
     """
-    root = Path(output_root).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    results = []
-    for engine_id in ENGINE_IDS:
-        r = build_engine_task.submit(engine_id, model_id, root)
-        results.append(r)
+    context: Dict[str, Any] = {
+        "model_id": model_id,
+        "output_dir": str(output_path),
+    }
 
-    # Wait for all and return results (Prefect gathers futures when returning)
-    return [r.result() for r in results]
+    try:
+        # Step 1
+        sha_n = step1_get_nightly_sha_task.submit().result()
+        context["sha_n"] = sha_n
+
+        # Step 2
+        pr_result = step2_match_pr_task.submit(model_id).result()
+        sha_m = pr_result["sha_m"]
+        model_registrations = pr_result["model_registrations"]
+        pr_number = pr_result["pr_number"]
+
+        if model_registrations:
+            primary_model_key = (
+                model_registrations[0].get("registration_key")
+                or model_registrations[0].get("class_name")
+                or "unknown-model"
+            )
+        else:
+            primary_model_key = model_id.split("/")[-1] if "/" in model_id else model_id
+
+        context["sha_m"] = sha_m
+        context["pr_number"] = pr_number
+        context["primary_model_key"] = primary_model_key
+
+        # Step 3
+        nightly_image_tag = step3_pull_and_verify_task.submit(sha_n).result()
+
+        # Step 4
+        is_ancestor = step4_check_ancestor_task.submit(sha_m, sha_n).result()
+
+        sha_n_tag = f"nightly-{sha_n}"
+
+        if is_ancestor:
+            image_tag_final = nightly_image_tag
+            package_source = "pull"
+            package_pr_number: int | None = None
+        else:
+            image_tag_final = step4b_docker_build_task.submit(
+                sha_m=sha_m,
+                sha_n=sha_n,
+                pr_number=pr_number,
+                model_key=primary_model_key,
+                output_root=output_path,
+            ).result()
+            package_source = "build"
+            package_pr_number = pr_number
+
+        # Step 5
+        step5_validate_task.submit(image_tag_final, model_registrations).result()
+
+        # Step 6
+        tar_path = step6_package_task.submit(
+            image_tag=image_tag_final,
+            output_root=output_path,
+            source=package_source,
+            sha_n_tag=sha_n_tag,
+            pr_number=package_pr_number,
+        ).result()
+
+        return {
+            "model_id": model_id,
+            "sha_n": sha_n,
+            "sha_m": sha_m,
+            "pr_number": pr_number,
+            "image_tag": image_tag_final,
+            "tar_path": str(tar_path),
+            "output_dir": str(output_path),
+        }
+
+    except Exception as e:
+        # Reuse existing error handler so notification behaviour is identical
+        handle_error("Build Pipeline (Prefect flow)", e, context)
+
+

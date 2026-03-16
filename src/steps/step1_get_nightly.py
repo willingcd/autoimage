@@ -3,7 +3,7 @@ import re
 import requests
 from typing import Optional
 
-from config import settings
+from src.config import settings
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)

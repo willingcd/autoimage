@@ -7,7 +7,7 @@ from typing import Optional
 from git import Repo, GitCommandError
 from git.exc import InvalidGitRepositoryError
 
-from config import settings
+from src.config import settings
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)

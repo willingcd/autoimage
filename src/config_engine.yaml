@@ -1,0 +1,36 @@
+vllm:
+  engine_name: vllm
+  github_repo_owner: vllm-project
+  github_repo_name: vllm
+  dockerhub_repository: vllm/vllm-openai
+  model_registry_import_path: vllm.model_executor.models
+  output_file_prefix: vllm
+  git_repo_url: https://github.com/vllm-project/vllm.git
+
+vllm-ascend:
+  engine_name: vllm-ascend
+  github_repo_owner: vllm-project
+  github_repo_name: vllm-ascend
+  dockerhub_repository: vllm/vllm-ascend
+  model_registry_import_path: vllm.model_executor.models
+  output_file_prefix: vllm-ascend
+  git_repo_url: https://github.com/vllm-project/vllm-ascend.git
+
+sglang:
+  engine_name: sglang
+  github_repo_owner: sgl-project
+  github_repo_name: sglang
+  dockerhub_repository: sgl-project/sglang
+  model_registry_import_path: sglang.model_executor.models
+  output_file_prefix: sglang
+  git_repo_url: https://github.com/sgl-project/sglang.git
+
+mindie:
+  engine_name: mindie
+  github_repo_owner: mindspore-lab
+  github_repo_name: mindie
+  dockerhub_repository: mindspore/mindie
+  model_registry_import_path: mindie.models
+  output_file_prefix: mindie
+  git_repo_url: https://github.com/mindspore-lab/mindie.git
+

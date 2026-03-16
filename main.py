@@ -5,7 +5,7 @@ from typing import Callable, TypeVar
 
 import click
 
-from config import settings
+from src.config import settings
 from src.utils.logger import setup_logger
 from src.error_handler import handle_error
 from src.steps.step1_get_nightly import get_nightly_sha

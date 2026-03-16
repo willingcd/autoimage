@@ -1,51 +1,87 @@
-# Prefect 多引擎并行构建
+# Prefect 流水线封装（可嵌入公司现有 Prefect 平台）
 
-在**不修改现有项目代码**的前提下，用 Prefect 编排一次触发、同时构建 vllm、vllm-ascend、sglang、mindie 四个厂商的镜像，并分别写入不同目录。
+本目录将现有的 6 步构建流程（Step 1–6）**用 Prefect 进行编排**，不修改任何已有源码。
+公司侧只需要把整个 `prefect_flow/` 目录拷贝到自己的代码仓库里，并在 Prefect 流水线中导入使用即可。
 
-## 行为说明
+## 依赖
 
-- **触发一次**：执行 `multi_engine_build_flow`，对 4 个引擎各起一个子进程运行现有 `main.py`。
-- **并行**：4 个引擎的构建任务并行执行（Prefect 的 task 并发）。
-- **输出目录**（在 `--output-root` 下按引擎分子目录）：
-  - vllm → `<output_root>/vllm/`
-  - vllm_ascend → `<output_root>/vllm_ascend/`
-  - sglang → `<output_root>/sglang/`
-  - mindie → `<output_root>/mindie/`
-
-每个引擎使用 `engine_configs.py` 里配置的 env 覆盖（GitHub 仓库、Docker 仓库、模型注册路径等），共享当前环境里的 `GITHUB_TOKEN` 等基础变量。
-
-## 安装
-
-在项目根目录安装主项目依赖后，再安装 Prefect（可只用 prefect_flow 的 requirements）：
+在包含本项目代码的虚拟环境中安装 Prefect：
 
 ```bash
-# 项目根目录
-pip install -r requirements.txt
 pip install -r prefect_flow/requirements.txt
 ```
 
-## 运行
+> 说明：主项目依赖（requests、docker 等）仍由根目录的 `requirements.txt` 提供。
 
-**必须在项目根目录执行**（即 `autoimages/v2` 所在目录）：
+## 核心入口
 
-```bash
-# 项目根目录
-python -m prefect_flow.run --model-id Qwen/Qwen3.5-35B-A3B-FP8 --output-root /output
+- 模块：`prefect_flow.flow`
+- 流函数：`build_pipeline_flow(model_id: str, output_dir: str) -> dict`
+
+示例（在公司自有 Prefect 流水线中使用）：
+
+```python
+from prefect import flow
+from prefect_flow.flow import build_pipeline_flow
+
+
+@flow
+def company_flow():
+    result = build_pipeline_flow(
+        model_id="Qwen/Qwen3.5-35B-A3B-FP8",
+        output_dir="/output/vllm",
+    )
+    # 在这里可以把 result 里的 sha_n/sha_m/pr_number/tar_path 等信息
+    # 继续传给下游任务（注册镜像、通知平台等）
 ```
 
-- `--model-id`：与现有 `main.py` 的 `--model-id` 一致。
-- `--output-root`：根输出目录，默认 `/output`；各引擎的 tar 等会落在其下 `vllm/`、`vllm_ascend/`、`sglang/`、`mindie/`。
+## 行为说明
 
-运行前请设置好环境变量（至少包含 `GITHUB_TOKEN`；各引擎如需不同 Docker/Git 配置，在 `engine_configs.py` 中修改）。
+`build_pipeline_flow` 内部严格复用原项目的 6 个 Step 实现：
 
-## 配置各引擎
+1. **Step 1**：`step1_get_nightly_sha_task` → 调用 `step1_get_nightly.get_nightly_sha`
+2. **Step 2**：`step2_match_pr_task` → 调用 `step2_match_pr.match_model_pr`
+3. **Step 3**：`step3_pull_and_verify_task` → 调用 `step3_pull_nightly.pull_nightly_and_verify`
+4. **Step 4**：`step4_check_ancestor_task` → 调用 `step4_check_ancestor.check_ancestor_relationship`
+   - 若 sha-m 是 sha-n 的祖先：直接使用 Step 3 拉取的 nightly 镜像
+   - 否则：
+     - **Step 4-B**：`step4b_docker_build_task` → 调用 `step4_docker_ops.docker_build_custom`
+5. **Step 5**：`step5_validate_task` → 调用 `step5_validate.validate_model_registrations`
+6. **Step 6**：`step6_package_task` → 调用 `step6_package.package_image` 生成 tar
 
-编辑 `prefect_flow/engine_configs.py`：
+返回值是一个包含关键信息的字典，例如：
 
-- **ENGINE_OUTPUT_SUBDIRS**：引擎 id 与输出子目录名（已按 vllm / vllm_ascend / sglang / mindie 配置）。
-- **ENGINE_ENV_OVERRIDES**：每个引擎的 env 覆盖（`GITHUB_REPO_OWNER`、`GITHUB_REPO_NAME`、`DOCKERHUB_REPOSITORY`、`MODEL_REGISTRY_IMPORT_PATH`、`OUTPUT_FILE_PREFIX`、`GIT_REPO_URL` 等）。其中的仓库/镜像名请按实际填写；当前 sglang、mindie 等为示例，需改成真实值。
+```python
+{
+  "model_id": "...",
+  "sha_n": "...",
+  "sha_m": "...",
+  "pr_number": 123,
+  "image_tag": "repo:nightly-xxx" or "repo:nightly-xxx_PR123",
+  "tar_path": "/output/.../images_tar/xxx.tar",
+  "output_dir": "/output/...",
+}
+```
 
-## 与现有代码的关系
+## 重试与告警
 
-- 本目录下**仅新增** Prefect 相关文件，**不修改** 根目录的 `main.py`、`config.py`、`src/` 等。
-- 实际构建仍由现有 `main.py` 完成；Prefect 只负责按引擎设置环境变量并指定 `--output-dir`，然后并行调用多个 `main.py` 子进程。
+- Prefect 级别：
+  - Step 1 / Step 2 / Step 3：`@task(retries=3, retry_delay_seconds=30)`
+  - Step 4-B：`@task(retries=3, retry_delay_seconds=60)`
+- 流级别异常处理：
+  - `build_pipeline_flow` 用 `try/except` 包裹整体，在异常时调用原项目的 `handle_error`：
+    - 通过 Webhook 向 App 发送错误告警（如果已配置）
+    - 重新抛出异常，使 Prefect 将该 flow 视为失败
+
+这样可以在公司 Prefect 平台上直接看到失败状态，同时保持与原 CLI 版本一致的告警行为。
+
+## 环境约定
+
+- 所有配置仍由原项目的 `config.py` 从 **环境变量** 中读取：
+  - `GITHUB_TOKEN`、`GITHUB_REPO_OWNER`、`GITHUB_REPO_NAME`
+  - `DOCKERHUB_REPOSITORY`、`ENGINE_NAME`、`MODEL_REGISTRY_IMPORT_PATH`、`OUTPUT_FILE_PREFIX` 等
+- Prefect 只负责调度，不改变配置来源。
+- 如需支持多引擎（vllm / vllm-ascend / sglang / mindie 等），推荐做法是：
+  - 由公司侧的上层 Prefect 流分别设置不同的环境变量或执行环境
+  - 针对每个引擎调用一次 `build_pipeline_flow`，并将 `output_dir` 设为不同子目录。
+

@@ -1,7 +1,7 @@
 """Step 5: Validate model registrations in Docker container."""
 from typing import Dict, List
 
-from config import settings
+from src.config import settings
 from src.utils.docker_utils import run_validation_container
 from src.utils.logger import setup_logger
 

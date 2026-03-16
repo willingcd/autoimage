@@ -20,7 +20,7 @@ sys.path.insert(0, str(project_root))
 from src.steps.step4_docker_ops import docker_build_custom, generate_dockerfile
 from src.utils.github_api import GitHubAPI
 from src.utils.logger import setup_logger
-from config import settings
+from src.config import settings
 
 logger = setup_logger(__name__)
 

@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 import requests
 
-from config import settings
+from src.config import settings
 from src.utils.github_api import GitHubAPI, extract_registrations_from_pr
 from src.utils.logger import setup_logger
 

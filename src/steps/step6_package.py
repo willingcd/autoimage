@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from config import settings
+from src.config import settings
 from src.utils.docker_utils import save_image
 from src.utils.logger import setup_logger
 

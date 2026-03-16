@@ -3,7 +3,7 @@ import logging
 import sys
 from pathlib import Path
 
-from config import settings
+from src.config import settings
 
 
 def setup_logger(name: str = "build_automation") -> logging.Logger:

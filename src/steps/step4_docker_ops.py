@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from src.utils.docker_utils import build_image
 from src.utils.github_api import GitHubAPI
 from src.utils.logger import setup_logger
-from config import settings
+from src.config import settings
 
 logger = setup_logger(__name__)
 
