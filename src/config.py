@@ -48,19 +48,31 @@ def _getenv_path(name: str, default: Path) -> Path:
 
 @dataclass(frozen=True)
 class Settings:
-    """Application settings loaded from environment variables."""
+    """Application settings loaded from environment variables.
 
-    # GitHub Configuration
+    NOTE: Engine-specific fields (engine_name, dockerhub_repository, etc.)
+    are driven by src/engine_config.py and can be overridden by env vars.
+    """
+
+    # Engine / repo / Docker configuration
+    engine_name: str
+    model_registry_import_path: str
+    output_file_prefix: str
+
     github_token: str
     github_repo_owner: str
     github_repo_name: str
 
+    dockerhub_repository: str
+    dockerhub_username: Optional[str]
+    dockerhub_token: Optional[str]
+
+    git_repo_url: str
+    git_repo_clone_dir: Path
+
     # App Notification
     app_webhook_url: Optional[str]
     app_api_key: Optional[str]
-
-    # Git Repository
-    git_repo_clone_dir: Path
 
     # Logging
     log_level: str
@@ -79,6 +91,17 @@ class Settings:
         engine_cfg = get_engine_config(engine_name)
 
         return Settings(
+            engine_name=engine_name,
+            model_registry_import_path=_getenv(
+                "MODEL_REGISTRY_IMPORT_PATH",
+                engine_cfg.model_registry_import_path,
+            )
+            or engine_cfg.model_registry_import_path,
+            output_file_prefix=_getenv(
+                "OUTPUT_FILE_PREFIX",
+                engine_cfg.output_file_prefix,
+            )
+            or engine_cfg.output_file_prefix,
             github_token=github_token,
             github_repo_owner=_getenv(
                 "GITHUB_REPO_OWNER",
@@ -90,9 +113,18 @@ class Settings:
                 engine_cfg.github_repo_name,
             )
             or engine_cfg.github_repo_name,
+            dockerhub_repository=_getenv(
+                "DOCKERHUB_REPOSITORY",
+                engine_cfg.dockerhub_repository,
+            )
+            or engine_cfg.dockerhub_repository,
+            dockerhub_username=_getenv("DOCKERHUB_USERNAME"),
+            dockerhub_token=_getenv("DOCKERHUB_TOKEN"),
+            git_repo_url=_getenv("GIT_REPO_URL", engine_cfg.git_repo_url)
+            or engine_cfg.git_repo_url,
+            git_repo_clone_dir=_getenv_path("GIT_REPO_CLONE_DIR", Path("./.repo_cache")),
             app_webhook_url=_getenv("APP_WEBHOOK_URL"),
             app_api_key=_getenv("APP_API_KEY"),
-            git_repo_clone_dir=_getenv_path("GIT_REPO_CLONE_DIR", Path("./.repo_cache")),
             log_level=_getenv("LOG_LEVEL", "INFO") or "INFO",
         )
 
